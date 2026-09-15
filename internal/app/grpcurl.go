@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"flag"
+	"io"
 	"strings"
 
 	"github.com/google/shlex"
@@ -42,7 +43,8 @@ func parseGrpcurlCommand(command string) (*grpcurlArguments, error) {
 		return nil, errors.New("invalid grpcurl command: must start with 'grpcurl'")
 	}
 
-	flags := flag.NewFlagSet(args[0], flag.ExitOnError)
+	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	// ignore flags
 	_ = flags.Bool("help", false, "")
 	_ = flags.Bool("version", false, "")
