@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 	protoV1 "github.com/golang/protobuf/proto"
@@ -41,6 +42,8 @@ const (
 	messageKeyPrefix         = "msg_"
 )
 
+var errStoreUnavailable = errors.New("app: local store is unavailable")
+
 // API is the Wails-bound backend for the frontend.
 type API struct {
 	ctx              context.Context
@@ -49,6 +52,7 @@ type API struct {
 	store            *store
 	protofiles       *protoregistry.Files
 	streamReq        chan proto.Message
+	streamMu         sync.Mutex // protect streamReq close/nil
 	cancelMonitoring context.CancelFunc
 	cancelInFlight   context.CancelFunc
 	mu               sync.Mutex // protect in-flight requests
@@ -127,17 +131,38 @@ func (a *API) once(event string, callback func(optionalData ...interface{})) {
 	runtime.EventsOnce(a.ctx, event, callback)
 }
 
+func (a *API) requireStore() error {
+	if a.store == nil {
+		return errStoreUnavailable
+	}
+	if a.state == nil {
+		a.state = &workspaceState{CurrentID: defaultWorkspaceKey}
+	}
+	return nil
+}
+
 func (a *API) wailsReady() {
 	a.emit(eventInit, initData{semver, a.buildMode()})
+
+	if a.store == nil {
+		a.logger.Errorf("app: store is unavailable; skipping auto-connect")
+		go a.checkForUpdate()
+		return
+	}
+	if a.state == nil {
+		a.state = &workspaceState{CurrentID: defaultWorkspaceKey}
+	}
 
 	opts, err := a.GetWorkspaceOptions()
 	if err != nil {
 		a.logger.Errorf("%v", err)
+		go a.checkForUpdate()
 		return
 	}
 	hds, err := a.GetReflectMetadata(opts.Addr)
 	if err != nil {
 		a.logger.Errorf("%v", err)
+		go a.checkForUpdate()
 		return
 	}
 
@@ -185,6 +210,9 @@ func (a *API) getCurrentState() *workspaceState {
 
 // GetWorkspaceOptions gets the workspace options from the store
 func (a *API) GetWorkspaceOptions() (*options, error) {
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
 	wo := &options{
 		ID: a.state.CurrentID,
 	}
@@ -213,11 +241,17 @@ func (a *API) GetWorkspaceOptions() (*options, error) {
 
 // GetReflectMetadata gets the reflection metadata from the store by addr
 func (a *API) GetReflectMetadata(addr string) (headers, error) {
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	hds := headers{}
 	val, err := a.store.get([]byte(reflectMetadataKeyPrefix + hash(addr)))
+	if err == errKeyNotFound || len(val) == 0 {
+		return hds, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	var hds headers
 	dec := gob.NewDecoder(bytes.NewBuffer(val))
 	err = dec.Decode(&hds)
 
@@ -226,11 +260,17 @@ func (a *API) GetReflectMetadata(addr string) (headers, error) {
 
 // GetMetadata gets the metadata from the store by addr
 func (a *API) GetMetadata(addr string) (headers, error) {
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
+	hds := headers{}
 	val, err := a.store.get([]byte(metadataKeyPrefix + hash(addr)))
+	if err == errKeyNotFound || len(val) == 0 {
+		return hds, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	var hds headers
 	dec := gob.NewDecoder(bytes.NewBuffer(val))
 	err = dec.Decode(&hds)
 
@@ -239,6 +279,9 @@ func (a *API) GetMetadata(addr string) (headers, error) {
 
 // ListWorkspaces returns a list of workspaces as their options
 func (a *API) ListWorkspaces() ([]options, error) {
+	if err := a.requireStore(); err != nil {
+		return nil, err
+	}
 	items, err := a.store.list([]byte(workspacePrefix))
 	if err != nil {
 		return nil, err
@@ -268,6 +311,9 @@ func (a *API) ListWorkspaces() ([]options, error) {
 
 // SelectWorkspace changes the current workspace by ID
 func (a *API) SelectWorkspace(id string) (rerr error) {
+	if err := a.requireStore(); err != nil {
+		return err
+	}
 	if a.state.CurrentID == id {
 		return nil
 	}
@@ -300,6 +346,9 @@ func (a *API) SelectWorkspace(id string) (rerr error) {
 // DeleteWorkspace will remove a workspace from the store and switch to
 // the default workspace, if the deleted workspace is current.
 func (a *API) DeleteWorkspace(id string) error {
+	if err := a.requireStore(); err != nil {
+		return err
+	}
 	a.store.del([]byte(id))
 	if a.state.CurrentID == id {
 		a.SelectWorkspace(defaultWorkspaceKey)
@@ -310,12 +359,18 @@ func (a *API) DeleteWorkspace(id string) error {
 
 // GetRawMessageState gets the message state by method full name
 func (a *API) GetRawMessageState(method string) (string, error) {
+	if err := a.requireStore(); err != nil {
+		return "", err
+	}
 	opts, err := a.GetWorkspaceOptions()
 	if err != nil {
 		return "", fmt.Errorf("failed to get message state, no workspace options: %v", err)
 	}
 
 	val, err := a.store.get([]byte(messageKeyPrefix + hash(opts.Addr, method)))
+	if err == errKeyNotFound {
+		return "", nil
+	}
 	return string(val), err
 }
 
@@ -372,6 +427,12 @@ func (a *API) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
 			a.emitError(errTitle, rerr.Error())
 		}
 	}()
+
+	if save {
+		if err := a.requireStore(); err != nil {
+			return err
+		}
+	}
 
 	var opts options
 	if err := mapstructure.Decode(data, &opts); err != nil {
@@ -434,6 +495,9 @@ func (a *API) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
 }
 
 func (a *API) changeWorkspace(id string) {
+	if a.store == nil {
+		return
+	}
 	a.state.CurrentID = id
 	var val bytes.Buffer
 	enc := gob.NewEncoder(&val)
@@ -535,6 +599,9 @@ func (a *API) emitServicesSelect(method string, data string, metadata headers) e
 }
 
 func (a *API) setWorkspaceOptions(opts options) {
+	if a.store == nil {
+		return
+	}
 	if opts.ID == "" {
 		opts.ID = defaultWorkspaceKey
 	}
@@ -546,6 +613,9 @@ func (a *API) setWorkspaceOptions(opts options) {
 }
 
 func (a *API) setMetadata(key string, hds headers) {
+	if a.store == nil {
+		return
+	}
 	var toSet headers
 	for _, h := range hds {
 		if h.Key == "" {
@@ -560,6 +630,9 @@ func (a *API) setMetadata(key string, hds headers) {
 }
 
 func (a *API) setMessage(method string, rawJSON []byte) {
+	if a.store == nil {
+		return
+	}
 	opts, err := a.GetWorkspaceOptions()
 	if err != nil {
 		a.logger.Errorf("failed to set message, no workspace options: %v", err)
@@ -578,7 +651,20 @@ func (a *API) monitorStateChanges(ctx context.Context) {
 		}
 	}()
 	for {
+		select {
+		case <-ctx.Done():
+			a.logger.Debug("ending monitoring of state changes")
+			return
+		default:
+		}
+
 		if a.client == nil || a.client.conn == nil {
+			select {
+			case <-ctx.Done():
+				a.logger.Debug("ending monitoring of state changes")
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 			continue
 		}
 		state := a.client.conn.GetState()
@@ -641,15 +727,17 @@ func (a *API) SelectMethod(fullname string, initState string, metadata interface
 }
 
 func messageViewFromDesc(md protoreflect.MessageDescriptor, cd *cyclicDetector) (*messageDesc, error) {
-	//(rogchap) this is a recursive function, therefore we should make sure we
-	// don't get a stack overflow. The protobuf wireformat does not support
-	// cyclic data objects: protocolbuffers/protobuf#5504
-	if err := cd.detect(md); err != nil {
-		return nil, err
-	}
 	var rtn messageDesc
 	rtn.Name = string(md.Name())
 	rtn.FullName = string(md.FullName())
+
+	// Recursive walk: snip when the same type exceeds maxCyclicDepth on the path
+	// so types like google.protobuf.Value remain usable.
+	if err := cd.detect(md); err != nil {
+		rtn.Fields = []fieldDesc{}
+		return &rtn, nil
+	}
+	defer cd.pop()
 
 	fds := md.Fields()
 	var err error
@@ -700,7 +788,6 @@ func fieldViewsFromDesc(fds protoreflect.FieldDescriptors, isOneof bool, cd *cyc
 				if err != nil {
 					return nil, err
 				}
-				cd.reset()
 			}
 			goto appendField
 		}
@@ -744,7 +831,6 @@ func fieldViewsFromDesc(fds protoreflect.FieldDescriptors, isOneof bool, cd *cyc
 			if err != nil {
 				return nil, err
 			}
-			cd.reset()
 		}
 
 	appendField:
@@ -754,15 +840,30 @@ func fieldViewsFromDesc(fds protoreflect.FieldDescriptors, isOneof bool, cd *cyc
 }
 
 func (a *API) RetryConnection() {
+	if a.client == nil || a.client.conn == nil {
+		return
+	}
 	state := a.client.conn.GetState()
 	if state == connectivity.TransientFailure || state == connectivity.Shutdown {
 		// State is currently disconnected. Do a quick retry in case the server restarted recently.
 		a.client.conn.ResetConnectBackoff()
-		stateChanged := make(chan bool)
-		waitForStateChange := func(data ...interface{}) { stateChanged <- true }
+		// Events require a Wails context; without it, waiting would always hit the timeout.
+		if a.ctx == nil {
+			return
+		}
+		stateChanged := make(chan bool, 1)
+		waitForStateChange := func(data ...interface{}) {
+			select {
+			case stateChanged <- true:
+			default:
+			}
+		}
 		a.once(eventClientStateChanged, waitForStateChange)
-		// Wait for at least one retry to complete before continuing
-		<-stateChanged
+		select {
+		case <-stateChanged:
+		case <-time.After(2 * time.Second):
+			a.logger.Debug("RetryConnection timed out waiting for state change")
+		}
 	}
 }
 
@@ -790,7 +891,13 @@ func (a *API) Send(method string, rawJSON string, rawHeaders interface{}) (rerr 
 	go a.setMessage(method, []byte(rawJSON))
 
 	if a.inFlight && md.IsStreamingClient() {
-		a.streamReq <- req
+		a.streamMu.Lock()
+		ch := a.streamReq
+		a.streamMu.Unlock()
+		if ch == nil {
+			return errors.New("stream is not open")
+		}
+		ch <- req
 		return nil
 	}
 
@@ -834,17 +941,21 @@ func (a *API) Send(method string, rawJSON string, rawHeaders interface{}) (rerr 
 			return err
 		}
 
-		a.streamReq = make(chan proto.Message)
+		ch := a.openStreamReq(0)
+		defer a.closeStreamReq()
 		go func() {
-			for r := range a.streamReq {
+			defer stream.CloseSend()
+			for {
+				r, ok := <-ch
+				if !ok {
+					return
+				}
 				if err := stream.SendMsg(r); err != nil {
-					close(a.streamReq)
-					a.streamReq = nil
+					return
 				}
 			}
-			stream.CloseSend()
 		}()
-		a.streamReq <- req
+		ch <- req
 
 		for {
 			resp := dynamicpb.NewMessage(md.Output())
@@ -861,23 +972,21 @@ func (a *API) Send(method string, rawJSON string, rawHeaders interface{}) (rerr 
 		if err != nil {
 			return err
 		}
-		a.streamReq = make(chan proto.Message, 1)
-		a.streamReq <- req
+		ch := a.openStreamReq(1)
+		defer a.closeStreamReq()
+		ch <- req
 		done := ctx.Done()
 
 	wait:
 		for {
 			select {
 			case <-done:
-				a.CloseSend()
 				return nil
-			case r := <-a.streamReq:
-				if r == nil {
+			case r, ok := <-ch:
+				if !ok || r == nil {
 					break wait
 				}
 				if err := stream.SendMsg(r); err != nil {
-					close(a.streamReq)
-					a.streamReq = nil
 					break wait
 				}
 			}
@@ -1014,6 +1123,23 @@ func formatPayload(payload interface{}) (string, error) {
 
 // CloseSend will stop streaming client messages
 func (a *API) CloseSend() {
+	a.closeStreamReq()
+}
+
+func (a *API) openStreamReq(buffer int) chan proto.Message {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if a.streamReq != nil {
+		close(a.streamReq)
+	}
+	ch := make(chan proto.Message, buffer)
+	a.streamReq = ch
+	return ch
+}
+
+func (a *API) closeStreamReq() {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
 	if a.streamReq != nil {
 		close(a.streamReq)
 		a.streamReq = nil
@@ -1050,7 +1176,10 @@ func (a *API) ExportCommands(method string, rawJSON string, rawHeaders interface
 		sb.WriteString("' \\\n")
 	}
 
-	option, _ := a.GetWorkspaceOptions()
+	option, err := a.GetWorkspaceOptions()
+	if err != nil || option == nil {
+		return nil
+	}
 	if option.Plaintext {
 		sb.WriteString("    -plaintext \\\n")
 	}

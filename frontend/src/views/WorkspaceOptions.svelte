@@ -13,7 +13,16 @@
 
   export let createNew = false;
 
-  let options = undefined;
+  let options = {
+    addr: '',
+    reflect: true,
+    protos: { files: [], roots: [] },
+    insecure: false,
+    plaintext: false,
+    rootca: '',
+    clientcert: '',
+    clientkey: '',
+  };
   let reflectmd = [];
 
   onMount(async () => {
