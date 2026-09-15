@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for connecting to unix sockets. Thanks to [@aschey](https://github.com/aschey)
 - Support google.protobuf.Struct. Thanks to [@n0trace](https://github.com/n0trace)
 - Unit tests covering the P0 reliability fixes above
+- GitHub Actions workflow to run `go test` on pull requests and pushes to `master`
 
 ## [v0.5.0] - 2021-04-26
 
