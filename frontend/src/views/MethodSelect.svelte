@@ -1,4 +1,5 @@
 <script>
+  import { Events, Browser } from '../runtime';
   import { createEventDispatcher } from "svelte";
   import Button from "../controls/Button.svelte";
   import Dropdown from "../controls/Dropdown.svelte";
@@ -21,7 +22,7 @@
     }))
   }
 
-  wails.Events.On("wombat:services_select_changed", async (data = [], methodFullName, initState, metadata) => {
+  Events.On("wombat:services_select_changed", async (data = [], methodFullName, initState, metadata) => {
     reset()
     servicesSelect = data;
     serviceOptions = data.map((s, i) => ({value: i, label: s.full_name}))

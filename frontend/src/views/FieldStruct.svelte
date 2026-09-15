@@ -1,4 +1,5 @@
 <script>
+  import { Events, Browser } from '../runtime';
   import InputLabel from "../controls/InputLabel.svelte";
   import Checkbox from "../controls/Checkbox.svelte";
   import TextArea from "../controls/TextArea.svelte";
@@ -31,7 +32,7 @@
       state[val] = JSON.parse(event.target.value);
     } catch (e) {
       state[val] = null;
-      wails.Events.Emit("wombat:error", {
+      Events.Emit("wombat:error", {
         msg: String(e),
         title: "parse  " + field.name + " error",
       });

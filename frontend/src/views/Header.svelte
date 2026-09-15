@@ -1,4 +1,5 @@
 <script>
+  import { Events, Browser } from '../runtime';
   import { getContext } from "svelte";
 
   import Button from "../controls/Button.svelte";
@@ -6,12 +7,12 @@
   import WorkspaceSwitcher from "./WorkspaceSwitcher.svelte";
 
   let addr = "";
-  wails.Events.On("wombat:client_connected", data => addr = data);
+  Events.On("wombat:client_connected", data => addr = data);
 
   let status = "";
-  wails.Events.On("wombat:client_state_changed", data => status = data.toLowerCase());
+  Events.On("wombat:client_state_changed", data => status = data.toLowerCase());
 
-  wails.Events.On("wombat:client_connect_started", data => {
+  Events.On("wombat:client_connect_started", data => {
     addr = data;
     status = "connecting";
   })

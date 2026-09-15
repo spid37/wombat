@@ -1,4 +1,5 @@
 <script>
+  import monaco from '../monaco';
   import { onMount } from "svelte";
 
   export let model;

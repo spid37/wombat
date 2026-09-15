@@ -4,16 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/hashicorp/go-version"
-	"github.com/wailsapp/wails"
-	"github.com/wailsapp/wails/cmd"
 )
 
-const latestReleaseURL = "https://api.github.com/repos/rogchap/wombat/releases/latest"
+const latestReleaseURL = "https://api.github.com/repos/spid37/wombat/releases/latest"
 
 var noUpdate = errors.New("no update available")
 
@@ -31,7 +29,7 @@ func init() {
 }
 
 func checkForUpdate() (*releaseInfo, error) {
-	if wails.BuildMode == cmd.BuildModeBridge {
+	if isDevProcess() {
 		return nil, noUpdate
 	}
 
@@ -44,12 +42,13 @@ func checkForUpdate() (*releaseInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %v", resp.StatusCode)
 	}
 
-	raw, err := ioutil.ReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}

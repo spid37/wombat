@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Migrate from Wails v1 to Wails v2 for modern macOS / Apple Silicon (native `darwin/arm64` builds, WKWebView)
+- Bump Go toolchain and refresh release CI runners (`macos-14`, `ubuntu-22.04`, `windows-2022`)
+- Bump Go deps (grpc, protobuf, protoreflect, uuid), frontend tooling (Rollup 4, Monaco, Babel), and CI actions/Node 24
+
 ### Added
 - Support for connecting to unix sockets. Thanks to [@aschey](https://github.com/aschey)
 - Support google.protobuf.Struct. Thanks to [@n0trace](https://github.com/n0trace)

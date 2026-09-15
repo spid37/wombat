@@ -1,4 +1,5 @@
 <script>
+  import { Events, Browser } from '../runtime';
   import Tab from "../controls/Tab.svelte";
   import Tabs from "../controls/Tabs.svelte";
   import TabList from "../controls/TabList.svelte";
@@ -32,7 +33,7 @@
     return tick();
   }
 
-  wails.Events.On("wombat:method_input_changed", async (data, initState, m) => {
+  Events.On("wombat:method_input_changed", async (data, initState, m) => {
     await reset();
     if (!data) {
       return
@@ -49,7 +50,7 @@
     }
   });
 
-  wails.Events.On("wombat:client_connect_started", async (addr) => {
+  Events.On("wombat:client_connect_started", async (addr) => {
     await reset(true)
     const m = await backend.api.GetMetadata(addr);
     if (m) {
