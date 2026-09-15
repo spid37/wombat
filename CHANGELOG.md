@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.7.0] - 2026-09-16
+
 ### Fixed
 - Stop 100% CPU busy-loop when connection monitor runs with a nil client (#110)
 - Treat missing metadata/message store keys as empty instead of blocking startup Connect
@@ -18,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep cyclic detector path/graph in sync when snipping; avoid blocking RetryConnection without a Wails context
 - Open/close stream request channels under a mutex without closing from the receive loop
 
+### Added
+- Unit tests covering the reliability fixes above
+- GitHub Actions workflow to run `go test` on pull requests and pushes to `master`
+
+## [v0.6.0] - 2026-09-15
+
 ### Changed
 - Migrate from Wails v1 to Wails v2 for modern macOS / Apple Silicon (native `darwin/arm64` builds, WKWebView)
 - Bump Go toolchain and refresh release CI runners (`macos-14`, `ubuntu-22.04`, `windows-2022`)
@@ -26,8 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Support for connecting to unix sockets. Thanks to [@aschey](https://github.com/aschey)
 - Support google.protobuf.Struct. Thanks to [@n0trace](https://github.com/n0trace)
-- Unit tests covering the P0 reliability fixes above
-- GitHub Actions workflow to run `go test` on pull requests and pushes to `master`
 
 ## [v0.5.0] - 2021-04-26
 
