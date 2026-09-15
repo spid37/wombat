@@ -1,4 +1,5 @@
 <script>
+  import { Events, Browser } from '../runtime';
   import Button from "../controls/Button.svelte";
 
   let visible = false;
@@ -6,7 +7,7 @@
   let newVersion = "";
   let releaseURL = "";
 
-  wails.Events.On("wombat:update_available", ({old_version, new_version, url}) => {
+  Events.On("wombat:update_available", ({old_version, new_version, url}) => {
     oldVersion = old_version;
     newVersion = new_version;
     releaseURL = url;
@@ -15,7 +16,7 @@
 
   const onCloseClicked = () => visible = false;
   const onDownloadClicked = async () => {
-    await wails.Browser.OpenURL(releaseURL)
+    await Browser.OpenURL(releaseURL)
     visible = false;
   }
 </script>

@@ -4,12 +4,12 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/rogchap/wombat/releases"><img src="https://img.shields.io/github/v/release/rogchap/wombat?include_prereleases&style=flat-square" alt="Github release"></a>
+<a href="https://github.com/spid37/wombat/releases"><img src="https://img.shields.io/github/v/release/spid37/wombat?include_prereleases&style=flat-square" alt="Github release"></a>
 <img alt="Homebrew Cask" src="https://img.shields.io/homebrew/cask/v/wombat?style=flat-square" />
 <img alt="AUR" src="https://img.shields.io/aur/version/wombat-bin?style=flat-square" />
 <br/>
-<img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/rogchap/wombat?style=flat-square" />
-<a href="https://goreportcard.com/badge/github.com/rogchap/wombat"><img alt="Go report card" src="https://goreportcard.com/badge/github.com/rogchap/wombat?style=flat-square" /></a>
+<img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/spid37/wombat?style=flat-square" />
+<a href="https://goreportcard.com/badge/github.com/spid37/wombat"><img alt="Go report card" src="https://goreportcard.com/badge/github.com/spid37/wombat?style=flat-square" /></a>
 <a href="https://github.com/grpc-ecosystem/awesome-grpc"><img alt="Awesome gRPC" src="https://raw.githubusercontent.com/sindresorhus/awesome/main/media/badge-flat.svg" /></a>
 </p>
 
@@ -47,13 +47,13 @@
 
 ## Download
 
-Visit the [Releases](https://github.com/rogchap/wombat/releases) page for the latest downloads. 
+Visit the [Releases](https://github.com/spid37/wombat/releases) page for the latest downloads. 
 
 ## Install
 
 ### MacOS
 
-[Download](https://github.com/rogchap/wombat/releases) and open `Wombat*_Darwin_86_64.dmg`, drag `Wombat.app` to the `Applications` folder and run from `Applications`.
+[Download](https://github.com/spid37/wombat/releases) and open `Wombat*_Darwin_arm64.dmg`, drag `Wombat.app` to the `Applications` folder and run from `Applications`.
 
 Or via [Homebrew](https://brew.sh/)
 
@@ -69,7 +69,7 @@ install.
 
 ### Linux
 
-[Download](https://github.com/rogchap/wombat/releases) and unarchive `Wombat*_Linux_86_64.tar.gz` and run.
+[Download](https://github.com/spid37/wombat/releases) and unarchive `Wombat*_Linux_86_64.tar.gz` and run.
 
 #### Arch Linux AUR
 
@@ -79,4 +79,4 @@ $ yay -S wombat-bin
 
 ### Windows
 
-[Download](https://github.com/rogchap/wombat/releases) and unarchive `Wombat*_Windows_86_64.zip` and run.
+[Download](https://github.com/spid37/wombat/releases) and unarchive `Wombat*_Windows_86_64.zip` and run.

@@ -1,21 +1,19 @@
-import "./monaco";
-import * as Wails from '@wailsapp/runtime';
+import './wails-bridge';
+import './monaco';
 import App from './views/App.svelte';
+import { Events } from './runtime';
 
-let app;
+Events.Once('wombat:init', (data) => {
+  const buildMode = data?.build_mode ?? data?.buildMode;
+  if (buildMode === 'prod') {
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+});
 
-Wails.Init(() => {
-    Wails.Events.Once("wombat:init", ({build_mode}) => {
-        if (build_mode === "prod") window.addEventListener('contextmenu', e => e.preventDefault());
-    });
+window.isWin = window.navigator.platform.startsWith('Win');
 
-    // TODO: v2
-    // Hack until we have wails v2 and can use CSS variables again
-    window.isWin = window.navigator.platform.startsWith("Win")
-
-    app = new App({
-        target: document.body,
-    });
-}); 
+const app = new App({
+  target: document.body,
+});
 
 export default app;

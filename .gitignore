@@ -1,9 +1,11 @@
-# old v1 
+# Local / generated
 vendor
-deploy
-moc*
-rcc*
-
-# new v2
-build
 .data
+frontend/node_modules/
+frontend/public/build/
+
+# Wails build output (keep templates/icons under build/)
+build/bin/
+build/darwin/Info.dev.plist
+
+.DS_Store

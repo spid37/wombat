@@ -1,20 +1,23 @@
 package main
 
 import (
-	_ "embed"
+	"embed"
+	"io/fs"
 	"os"
+
 	"wombat/internal/app"
 )
 
-//go:embed frontend/public/build/bundle.js
-var js string
+//go:embed all:frontend/public
+var embeddedAssets embed.FS
 
-//go:embed frontend/public/build/bundle.css
-var css string
-
-//go:embed frontend/public/build/extra.css
-var extra string
+//go:embed build/appicon.png
+var icon []byte
 
 func main() {
-	os.Exit(app.Run(js, css+extra))
+	assets, err := fs.Sub(embeddedAssets, "frontend/public")
+	if err != nil {
+		panic(err)
+	}
+	os.Exit(app.Run(assets, icon))
 }

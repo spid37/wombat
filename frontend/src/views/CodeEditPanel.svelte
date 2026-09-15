@@ -1,4 +1,5 @@
 <script>
+  import monaco from '../monaco';
   import { getContext, onMount } from 'svelte';
 
   import Button from '../controls/Button.svelte';

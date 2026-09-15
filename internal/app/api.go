@@ -13,12 +13,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gofrs/uuid"
+	"github.com/gofrs/uuid/v5"
 	protoV1 "github.com/golang/protobuf/proto"
 	"github.com/mitchellh/mapstructure"
-	"github.com/wailsapp/wails"
-	"github.com/wailsapp/wails/cmd"
-	"github.com/wailsapp/wails/lib/logger"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 	_ "google.golang.org/genproto/googleapis/rpc/errdetails" // needed to register message types in init()
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -30,6 +28,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
+
+	"wombat/internal/server"
 )
 
 const (
@@ -41,9 +41,10 @@ const (
 	messageKeyPrefix         = "msg_"
 )
 
-type api struct {
-	runtime          *wails.Runtime
-	logger           *logger.CustomLogger
+// API is the Wails-bound backend for the frontend.
+type API struct {
+	ctx              context.Context
+	logger           *appLogger
 	client           *client
 	store            *store
 	protofiles       *protoregistry.Files
@@ -57,42 +58,77 @@ type api struct {
 }
 
 type statsHandler struct {
-	*api
+	*API
 }
 
-type storeLogger struct {
-	*logger.CustomLogger
+// NewAPI creates the application backend.
+func NewAPI(appData string) *API {
+	return &API{
+		appData: appData,
+		logger:  newAppLogger(nil, "API"),
+	}
 }
 
-func (s storeLogger) Warningf(message string, args ...interface{}) {
-	s.Warnf(message, args...)
-}
+func (a *API) startup(ctx context.Context) {
+	a.ctx = ctx
+	a.logger.setContext(ctx)
 
-// WailsInit is the init fuction for the wails runtime
-func (a *api) WailsInit(runtime *wails.Runtime) error {
-	a.runtime = runtime
-	a.logger = runtime.Log.New("API")
+	if runtime.Environment(ctx).BuildType != "production" {
+		go server.Serve()
+	}
 
 	var err error
-
-	a.store, err = newStore(a.appData, storeLogger{runtime.Log.New("DB")})
+	a.store, err = newStore(a.appData, newAppLogger(ctx, "DB"))
 	if err != nil {
-		return fmt.Errorf("app: failed to create database: %v", err)
+		a.logger.Errorf("app: failed to create database: %v", err)
+		return
 	}
 	a.state = a.getCurrentState()
-
-	ready := "wails:ready"
-	if wails.BuildMode == cmd.BuildModeBridge {
-		ready = "wails:loaded"
-	}
-
-	a.runtime.Events.On(ready, a.wailsReady)
-
-	return nil
 }
 
-func (a *api) wailsReady(data ...interface{}) {
-	a.runtime.Events.Emit(eventInit, initData{semver, wails.BuildMode})
+func (a *API) domReady(ctx context.Context) {
+	a.wailsReady()
+}
+
+func (a *API) shutdown(ctx context.Context) {
+	a.store.close()
+	if a.cancelMonitoring != nil {
+		a.cancelMonitoring()
+	}
+	if a.cancelInFlight != nil {
+		a.cancelInFlight()
+	}
+	if a.client != nil {
+		a.client.close()
+	}
+}
+
+func (a *API) buildMode() string {
+	if a.ctx == nil {
+		return "dev"
+	}
+	if runtime.Environment(a.ctx).BuildType == "production" {
+		return "prod"
+	}
+	return "dev"
+}
+
+func (a *API) emit(event string, data ...interface{}) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, event, data...)
+}
+
+func (a *API) once(event string, callback func(optionalData ...interface{})) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsOnce(a.ctx, event, callback)
+}
+
+func (a *API) wailsReady() {
+	a.emit(eventInit, initData{semver, a.buildMode()})
 
 	opts, err := a.GetWorkspaceOptions()
 	if err != nil {
@@ -112,7 +148,7 @@ func (a *api) wailsReady(data ...interface{}) {
 	go a.checkForUpdate()
 }
 
-func (a *api) checkForUpdate() {
+func (a *API) checkForUpdate() {
 	r, err := checkForUpdate()
 	if err != nil {
 		if err == noUpdate {
@@ -122,28 +158,14 @@ func (a *api) checkForUpdate() {
 		a.logger.Warnf("failed to check for updates: %v", err)
 		return
 	}
-	a.runtime.Events.Emit(eventUpdateAvailable, r)
+	a.emit(eventUpdateAvailable, r)
 }
 
-// WailsShutdown is the shutdown function that is called when wails shuts down
-func (a *api) WailsShutdown() {
-	a.store.close()
-	if a.cancelMonitoring != nil {
-		a.cancelMonitoring()
-	}
-	if a.cancelInFlight != nil {
-		a.cancelInFlight()
-	}
-	if a.client != nil {
-		a.client.close()
-	}
+func (a *API) emitError(title, msg string) {
+	a.emit(eventError, errorMsg{title, msg})
 }
 
-func (a *api) emitError(title, msg string) {
-	a.runtime.Events.Emit(eventError, errorMsg{title, msg})
-}
-
-func (a *api) getCurrentState() *workspaceState {
+func (a *API) getCurrentState() *workspaceState {
 	rtn := &workspaceState{
 		CurrentID: defaultWorkspaceKey,
 	}
@@ -162,7 +184,7 @@ func (a *api) getCurrentState() *workspaceState {
 }
 
 // GetWorkspaceOptions gets the workspace options from the store
-func (a *api) GetWorkspaceOptions() (*options, error) {
+func (a *API) GetWorkspaceOptions() (*options, error) {
 	wo := &options{
 		ID: a.state.CurrentID,
 	}
@@ -190,7 +212,7 @@ func (a *api) GetWorkspaceOptions() (*options, error) {
 }
 
 // GetReflectMetadata gets the reflection metadata from the store by addr
-func (a *api) GetReflectMetadata(addr string) (headers, error) {
+func (a *API) GetReflectMetadata(addr string) (headers, error) {
 	val, err := a.store.get([]byte(reflectMetadataKeyPrefix + hash(addr)))
 	if err != nil {
 		return nil, err
@@ -203,7 +225,7 @@ func (a *api) GetReflectMetadata(addr string) (headers, error) {
 }
 
 // GetMetadata gets the metadata from the store by addr
-func (a *api) GetMetadata(addr string) (headers, error) {
+func (a *API) GetMetadata(addr string) (headers, error) {
 	val, err := a.store.get([]byte(metadataKeyPrefix + hash(addr)))
 	if err != nil {
 		return nil, err
@@ -216,7 +238,7 @@ func (a *api) GetMetadata(addr string) (headers, error) {
 }
 
 // ListWorkspaces returns a list of workspaces as their options
-func (a *api) ListWorkspaces() ([]options, error) {
+func (a *API) ListWorkspaces() ([]options, error) {
 	items, err := a.store.list([]byte(workspacePrefix))
 	if err != nil {
 		return nil, err
@@ -245,7 +267,7 @@ func (a *api) ListWorkspaces() ([]options, error) {
 }
 
 // SelectWorkspace changes the current workspace by ID
-func (a *api) SelectWorkspace(id string) (rerr error) {
+func (a *API) SelectWorkspace(id string) (rerr error) {
 	if a.state.CurrentID == id {
 		return nil
 	}
@@ -277,7 +299,7 @@ func (a *api) SelectWorkspace(id string) (rerr error) {
 
 // DeleteWorkspace will remove a workspace from the store and switch to
 // the default workspace, if the deleted workspace is current.
-func (a *api) DeleteWorkspace(id string) error {
+func (a *API) DeleteWorkspace(id string) error {
 	a.store.del([]byte(id))
 	if a.state.CurrentID == id {
 		a.SelectWorkspace(defaultWorkspaceKey)
@@ -287,7 +309,7 @@ func (a *api) DeleteWorkspace(id string) error {
 }
 
 // GetRawMessageState gets the message state by method full name
-func (a *api) GetRawMessageState(method string) (string, error) {
+func (a *API) GetRawMessageState(method string) (string, error) {
 	opts, err := a.GetWorkspaceOptions()
 	if err != nil {
 		return "", fmt.Errorf("failed to get message state, no workspace options: %v", err)
@@ -298,7 +320,7 @@ func (a *api) GetRawMessageState(method string) (string, error) {
 }
 
 //FindProtoFiles opens a directory dialog to search for proto files
-func (a *api) FindProtoFiles() (files []string, rerr error) {
+func (a *API) FindProtoFiles() (files []string, rerr error) {
 	defer func() {
 		if rerr != nil {
 			const errTitle = "Not found"
@@ -324,22 +346,29 @@ func (a *api) FindProtoFiles() (files []string, rerr error) {
 	return files, nil
 }
 
-//SelectDirectory opens a directory dialog and returns the path of the selected directory
-func (a *api) SelectDirectory() string {
-	if wails.BuildMode == cmd.BuildModeBridge {
+// SelectDirectory opens a directory dialog and returns the path of the selected directory
+func (a *API) SelectDirectory() string {
+	if isDevProcess() {
 		f, _ := filepath.Abs(filepath.Join(".", "internal", "server"))
 		return f
 	}
-	return a.runtime.Dialog.SelectDirectory()
+	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select directory",
+	})
+	if err != nil {
+		a.logger.Errorf("directory dialog: %v", err)
+		return ""
+	}
+	return path
 }
 
 // Connect will attempt to connect a grpc server and parse any proto files
-func (a *api) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
+func (a *API) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
 	defer func() {
 		if rerr != nil {
 			const errTitle = "Connection error"
 			a.logger.Errorf(rerr.Error())
-			a.runtime.Events.Emit(eventClientStateChanged, connectivity.Shutdown.String())
+			a.emit(eventClientStateChanged, connectivity.Shutdown.String())
 			a.emitError(errTitle, rerr.Error())
 		}
 	}()
@@ -350,9 +379,9 @@ func (a *api) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
 	}
 
 	// reset all things
-	a.runtime.Events.Emit(eventClientConnectStarted, opts.Addr)
-	a.runtime.Events.Emit(eventServicesSelectChanged)
-	a.runtime.Events.Emit(eventMethodInputChanged)
+	a.emit(eventClientConnectStarted, opts.Addr)
+	a.emit(eventServicesSelectChanged)
+	a.emit(eventMethodInputChanged)
 
 	if a.client != nil {
 		if err := a.client.close(); err != nil {
@@ -384,7 +413,7 @@ func (a *api) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
 		return fmt.Errorf("failed to connect to server: %v", err)
 	}
 
-	a.runtime.Events.Emit(eventClientConnected, opts.Addr)
+	a.emit(eventClientConnected, opts.Addr)
 
 	go a.loadProtoFiles(opts, hds, false)
 
@@ -404,7 +433,7 @@ func (a *api) Connect(data, rawHeaders interface{}, save bool) (rerr error) {
 	return nil
 }
 
-func (a *api) changeWorkspace(id string) {
+func (a *API) changeWorkspace(id string) {
 	a.state.CurrentID = id
 	var val bytes.Buffer
 	enc := gob.NewEncoder(&val)
@@ -413,7 +442,7 @@ func (a *api) changeWorkspace(id string) {
 	a.store.set([]byte(defaultStateKey), val.Bytes())
 }
 
-func (a *api) loadProtoFiles(opts options, reflectHeaders headers, silent bool) (rerr error) {
+func (a *API) loadProtoFiles(opts options, reflectHeaders headers, silent bool) (rerr error) {
 	defer func() {
 		if rerr != nil {
 			const errTitle = "Failed to load RPC schema"
@@ -454,7 +483,7 @@ func (a *api) loadProtoFiles(opts options, reflectHeaders headers, silent bool) 
 	return a.emitServicesSelect("", "", nil)
 }
 
-func (a *api) emitServicesSelect(method string, data string, metadata headers) error {
+func (a *API) emitServicesSelect(method string, data string, metadata headers) error {
 	if a.protofiles == nil {
 		return nil
 	}
@@ -501,11 +530,11 @@ func (a *api) emitServicesSelect(method string, data string, metadata headers) e
 	if method != "" && targetMd == nil {
 		return fmt.Errorf("method %q not found. ", method)
 	}
-	a.runtime.Events.Emit(eventServicesSelectChanged, ss, method, data, metadata)
+	a.emit(eventServicesSelectChanged, ss, method, data, metadata)
 	return nil
 }
 
-func (a *api) setWorkspaceOptions(opts options) {
+func (a *API) setWorkspaceOptions(opts options) {
 	if opts.ID == "" {
 		opts.ID = defaultWorkspaceKey
 	}
@@ -516,7 +545,7 @@ func (a *api) setWorkspaceOptions(opts options) {
 	a.store.set([]byte(opts.ID), val.Bytes())
 }
 
-func (a *api) setMetadata(key string, hds headers) {
+func (a *API) setMetadata(key string, hds headers) {
 	var toSet headers
 	for _, h := range hds {
 		if h.Key == "" {
@@ -530,7 +559,7 @@ func (a *api) setMetadata(key string, hds headers) {
 	a.store.set([]byte(key), val.Bytes())
 }
 
-func (a *api) setMessage(method string, rawJSON []byte) {
+func (a *API) setMessage(method string, rawJSON []byte) {
 	opts, err := a.GetWorkspaceOptions()
 	if err != nil {
 		a.logger.Errorf("failed to set message, no workspace options: %v", err)
@@ -540,7 +569,7 @@ func (a *api) setMessage(method string, rawJSON []byte) {
 	a.store.set([]byte(messageKeyPrefix+hash(opts.Addr, method)), rawJSON)
 }
 
-func (a *api) monitorStateChanges(ctx context.Context) {
+func (a *API) monitorStateChanges(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			// this will panic if we are waiting for a state change and the client (and it's connection)
@@ -553,7 +582,7 @@ func (a *api) monitorStateChanges(ctx context.Context) {
 			continue
 		}
 		state := a.client.conn.GetState()
-		a.runtime.Events.Emit(eventClientStateChanged, state.String())
+		a.emit(eventClientStateChanged, state.String())
 		if ok := a.client.conn.WaitForStateChange(ctx, state); !ok {
 			a.logger.Debug("ending monitoring of state changes")
 			return
@@ -561,7 +590,7 @@ func (a *api) monitorStateChanges(ctx context.Context) {
 	}
 }
 
-func (a *api) getMethodDesc(fullname string) (protoreflect.MethodDescriptor, error) {
+func (a *API) getMethodDesc(fullname string) (protoreflect.MethodDescriptor, error) {
 	name := strings.Replace(fullname[1:], "/", ".", 1)
 	desc, err := a.protofiles.FindDescriptorByName(protoreflect.FullName(name))
 	if err != nil {
@@ -577,13 +606,13 @@ func (a *api) getMethodDesc(fullname string) (protoreflect.MethodDescriptor, err
 }
 
 // SelectMethod is called when the user selects a new method by the given name
-func (a *api) SelectMethod(fullname string, initState string, metadata interface{}) (rerr error) {
+func (a *API) SelectMethod(fullname string, initState string, metadata interface{}) (rerr error) {
 	defer func() {
 		if rerr != nil {
 			const errTitle = "Failed to select method"
 			a.logger.Errorf(rerr.Error())
 			a.emitError(errTitle, rerr.Error())
-			a.runtime.Events.Emit(eventMethodInputChanged)
+			a.emit(eventMethodInputChanged)
 		}
 	}()
 
@@ -604,9 +633,9 @@ func (a *api) SelectMethod(fullname string, initState string, metadata interface
 
 	var hs headers
 	if err := mapstructure.Decode(metadata, &hs); err != nil {
-		a.runtime.Events.Emit(eventMethodInputChanged, m, initState)
+		a.emit(eventMethodInputChanged, m, initState)
 	} else {
-		a.runtime.Events.Emit(eventMethodInputChanged, m, initState, hs)
+		a.emit(eventMethodInputChanged, m, initState, hs)
 	}
 	return nil
 }
@@ -724,20 +753,20 @@ func fieldViewsFromDesc(fds protoreflect.FieldDescriptors, isOneof bool, cd *cyc
 	return fields, nil
 }
 
-func (a *api) RetryConnection() {
+func (a *API) RetryConnection() {
 	state := a.client.conn.GetState()
 	if state == connectivity.TransientFailure || state == connectivity.Shutdown {
 		// State is currently disconnected. Do a quick retry in case the server restarted recently.
 		a.client.conn.ResetConnectBackoff()
 		stateChanged := make(chan bool)
 		waitForStateChange := func(data ...interface{}) { stateChanged <- true }
-		a.runtime.Events.Once(eventClientStateChanged, waitForStateChange)
+		a.once(eventClientStateChanged, waitForStateChange)
 		// Wait for at least one retry to complete before continuing
 		<-stateChanged
 	}
 }
 
-func (a *api) Send(method string, rawJSON []byte, rawHeaders interface{}) (rerr error) {
+func (a *API) Send(method string, rawJSON string, rawHeaders interface{}) (rerr error) {
 	defer func() {
 		if rerr != nil {
 			const errTitle = "Unable to send request"
@@ -754,11 +783,11 @@ func (a *api) Send(method string, rawJSON []byte, rawHeaders interface{}) (rerr 
 	}
 
 	req := dynamicpb.NewMessage(md.Input())
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(rawJSON, req); err != nil {
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(rawJSON), req); err != nil {
 		return err
 	}
 
-	go a.setMessage(method, rawJSON)
+	go a.setMessage(method, []byte(rawJSON))
 
 	if a.inFlight && md.IsStreamingClient() {
 		a.streamReq <- req
@@ -794,7 +823,7 @@ func (a *api) Send(method string, rawJSON []byte, rawHeaders interface{}) (rerr 
 
 	ctx, a.cancelInFlight = context.WithCancel(ctx)
 
-	a.runtime.Events.Emit(eventRPCStarted, rpcStart{
+	a.emit(eventRPCStarted, rpcStart{
 		ClientStream: md.IsStreamingClient(),
 		ServerStream: md.IsStreamingServer(),
 	})
@@ -910,20 +939,20 @@ func (a statsHandler) HandleRPC(ctx context.Context, stat stats.RPCStats) {
 
 	switch s := stat.(type) {
 	case *stats.Begin:
-		a.runtime.Events.Emit(eventStatBegin, s)
+		a.emit(eventStatBegin, s)
 	case *stats.OutHeader:
-		a.runtime.Events.Emit(eventStatOutHeader, rpcStatOutHeader{s, fmt.Sprintf("%+v", s.Header)})
+		a.emit(eventStatOutHeader, rpcStatOutHeader{s, fmt.Sprintf("%+v", s.Header)})
 	case *stats.OutPayload:
 		if p, err := formatPayload(s.Payload); err == nil {
 			s.Payload = p
 		}
-		a.runtime.Events.Emit(eventStatOutPayload, rpcStatOutPayload{s, fmt.Sprintf("%+v", s.Data)})
-		a.runtime.Events.Emit(eventOutPayloadReceived, s.Payload)
+		a.emit(eventStatOutPayload, rpcStatOutPayload{s, fmt.Sprintf("%+v", s.Payload)})
+		a.emit(eventOutPayloadReceived, s.Payload)
 	case *stats.OutTrailer:
-		a.runtime.Events.Emit(eventStatOutTrailer, rpcStatOutTrailer{s, fmt.Sprintf("%+v", s.Trailer)})
+		a.emit(eventStatOutTrailer, rpcStatOutTrailer{s, fmt.Sprintf("%+v", s.Trailer)})
 	case *stats.InHeader:
-		a.runtime.Events.Emit(eventStatInHeader, rpcStatInHeader{s, fmt.Sprintf("%+v", s.Header)})
-		a.runtime.Events.Emit(eventInHeaderReceived, s.Header)
+		a.emit(eventStatInHeader, rpcStatInHeader{s, fmt.Sprintf("%+v", s.Header)})
+		a.emit(eventInHeaderReceived, s.Header)
 	case *stats.InPayload:
 		txt, err := formatPayload(s.Payload)
 		if err != nil {
@@ -931,11 +960,11 @@ func (a statsHandler) HandleRPC(ctx context.Context, stat stats.RPCStats) {
 			return
 		}
 		s.Payload = txt
-		a.runtime.Events.Emit(eventStatInPayload, rpcStatInPayload{s, fmt.Sprintf("%+v", s.Data)})
-		a.runtime.Events.Emit(eventInPayloadReceived, txt)
+		a.emit(eventStatInPayload, rpcStatInPayload{s, fmt.Sprintf("%+v", s.Payload)})
+		a.emit(eventInPayloadReceived, txt)
 	case *stats.InTrailer:
-		a.runtime.Events.Emit(eventStatInTrailer, rpcStatInTrailer{s, fmt.Sprintf("%+v", s.Trailer)})
-		a.runtime.Events.Emit(eventInTrailerReceived, s.Trailer)
+		a.emit(eventStatInTrailer, rpcStatInTrailer{s, fmt.Sprintf("%+v", s.Trailer)})
+		a.emit(eventInTrailerReceived, s.Trailer)
 	case *stats.End:
 
 		errProtoStr := ""
@@ -947,16 +976,16 @@ func (a statsHandler) HandleRPC(ctx context.Context, stat stats.RPCStats) {
 				a.logger.Errorf("failed to marshal status error to proto text: %v", err)
 			}
 			if errProtoStr != "" {
-				a.runtime.Events.Emit(eventErrorReceived, errProtoStr)
+				a.emit(eventErrorReceived, errProtoStr)
 			}
 		}
-		a.runtime.Events.Emit(eventStatEnd, rpcStatEnd{s, errProtoStr})
+		a.emit(eventStatEnd, rpcStatEnd{s, errProtoStr})
 
 		var end rpcEnd
 		end.StatusCode = int32(stus.Code())
 		end.Status = stus.Code().String()
 		end.Duration = s.EndTime.Sub(s.BeginTime).String()
-		a.runtime.Events.Emit(eventRPCEnded, end)
+		a.emit(eventRPCEnded, end)
 	}
 }
 
@@ -984,7 +1013,7 @@ func formatPayload(payload interface{}) (string, error) {
 }
 
 // CloseSend will stop streaming client messages
-func (a *api) CloseSend() {
+func (a *API) CloseSend() {
 	if a.streamReq != nil {
 		close(a.streamReq)
 		a.streamReq = nil
@@ -992,18 +1021,18 @@ func (a *api) CloseSend() {
 }
 
 // Cancel will attempt to cancel the current inflight request
-func (a *api) Cancel() {
+func (a *API) Cancel() {
 	if a.cancelInFlight != nil {
 		a.cancelInFlight()
 	}
 }
 
 // Export commands for call
-func (a *api) ExportCommands(method string, rawJSON []byte, rawHeaders interface{}) *commands {
+func (a *API) ExportCommands(method string, rawJSON string, rawHeaders interface{}) *commands {
 	var sb strings.Builder
 	sb.WriteString("grpcurl ")
 	sb.WriteString("-d '")
-	sb.Write(rawJSON)
+	sb.WriteString(rawJSON)
 	sb.WriteString("' \\\n")
 
 	var hs headers
@@ -1047,7 +1076,7 @@ func (a *api) ExportCommands(method string, rawJSON []byte, rawHeaders interface
 	}
 }
 
-func (a *api) ImportCommand(kind string, command string) (rerr error) {
+func (a *API) ImportCommand(kind string, command string) (rerr error) {
 	defer func() {
 		if rerr != nil {
 			const errTitle = "Failed to import command"
