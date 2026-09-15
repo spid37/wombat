@@ -45,8 +45,9 @@ func TestMessageViewFromDescSelfReferentialSnips(t *testing.T) {
 		}
 		cur = cur.Fields[0].Message
 	}
-	if depth < 1 {
-		t.Fatal("expected at least one nesting level")
+	// maxCyclicDepth successful Node visits, then one snipped empty leaf.
+	if depth != maxCyclicDepth+1 {
+		t.Fatalf("expected nesting depth %d (snip after %d), got %d", maxCyclicDepth+1, maxCyclicDepth, depth)
 	}
 }
 
@@ -64,6 +65,21 @@ func TestCyclicDetectorErrorsBeyondMaxDepth(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cyclic") {
 		t.Fatalf("expected cyclic error, got %v", err)
+	}
+	// Failed detect must not push path/graph (would desync pop).
+	if len(cd.path) != maxCyclicDepth || len(cd.graph) != maxCyclicDepth {
+		t.Fatalf("snip should not push; path=%d graph=%d want %d", len(cd.path), len(cd.graph), maxCyclicDepth)
+	}
+}
+
+func TestCyclicDetectorSnipKeepsPathGraphInSync(t *testing.T) {
+	node := mustSelfRefNode(t)
+	cd := &cyclicDetector{}
+	if _, err := messageViewFromDesc(node, cd); err != nil {
+		t.Fatal(err)
+	}
+	if len(cd.path) != 0 || len(cd.graph) != 0 {
+		t.Fatalf("after full walk path/graph should be empty; path=%v graph=%v", cd.path, cd.graph)
 	}
 }
 

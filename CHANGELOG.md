@@ -13,8 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Guard `RetryConnection` against nil client/conn and add a wait timeout
 - Make stream request channel close idempotent (no double-close panic)
 - Initialize workspace options when creating a new workspace
-- Skip auto-connect when the local store failed to open
+- Skip auto-connect when the local store failed to open; return errors from store-backed APIs instead of nil-deref
 - Allow cyclic protobuf types (e.g. `google.protobuf.Value`) up to depth 7, then snip (#100 / #107 / upstream PR #111)
+- Keep cyclic detector path/graph in sync when snipping; avoid blocking RetryConnection without a Wails context
+- Open/close stream request channels under a mutex without closing from the receive loop
 
 ### Changed
 - Migrate from Wails v1 to Wails v2 for modern macOS / Apple Silicon (native `darwin/arm64` builds, WKWebView)

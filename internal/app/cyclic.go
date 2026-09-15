@@ -25,11 +25,16 @@ func (d *cyclicDetector) detect(md protoreflect.MessageDescriptor) error {
 			count++
 		}
 	}
-	d.graph = append(d.graph, string(n))
 	if count >= maxCyclicDepth {
-		return fmt.Errorf("unable to parse proto descriptors: cyclic data detected: %s", strings.Join(d.graph, " → "))
+		trail := strings.Join(d.graph, " → ")
+		if trail != "" {
+			trail += " → "
+		}
+		return fmt.Errorf("unable to parse proto descriptors: cyclic data detected: %s%s", trail, n)
 	}
+	// Only push after the depth check so a snip does not desync graph/path.
 	d.path = append(d.path, f)
+	d.graph = append(d.graph, string(n))
 	return nil
 }
 
