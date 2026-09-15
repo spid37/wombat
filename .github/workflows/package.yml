@@ -46,6 +46,9 @@ jobs:
         if: matrix.os_name == 'darwin'
         shell: bash
         run: |
+          MACOSX_DEPLOYMENT_TARGET=13.0 \
+          CGO_CFLAGS="-mmacosx-version-min=13.0" \
+          CGO_LDFLAGS="-mmacosx-version-min=13.0" \
           wails build -platform darwin/arm64 -ldflags "-X wombat/internal/app.semver=${{ steps.version.outputs.tag }}"
 
       - name: Create darwin disk image
