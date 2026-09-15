@@ -138,7 +138,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           body: Full changelog ⇒ [${{ steps.version.outputs.tag }}](${{ steps.changelog.outputs.url }})
-          draft: true
+          draft: false
           files: |
             Wombat_${{ steps.version.outputs.tag }}_Darwin_arm64.dmg
             Wombat_${{ steps.version.outputs.tag }}_Linux_x86_64.tar.gz
